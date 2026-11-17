@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -37,8 +38,13 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var rootLayout: LinearLayout
     private lateinit var touchpadView: TouchpadView
+    private lateinit var miniCursorPad: TouchpadView
     private lateinit var mouseButtonsRow: LinearLayout
     private lateinit var leftStackedButtons: LinearLayout
+    private lateinit var quickStripDivider: View
+    private lateinit var quickStripView: View
+    private lateinit var tiktokControls: LinearLayout
+    private lateinit var tiktokToggleBtn: TextView
     private lateinit var remoteImeView: RemoteImeView
     private lateinit var centerHint: TextView
     private lateinit var uploadBtn: ImageButton
@@ -49,15 +55,15 @@ class MainActivity : AppCompatActivity() {
     private val modifierViews = LinkedHashMap<String, TextView>()
     private var settingsDialog: SettingsDialog? = null
     private var keyboardUserHidden = false
+    private var lastAppliedTiktokMode: Boolean? = null
     private val heldMouseButtons = LinkedHashSet<String>()
+    private var currentZoomLevel = 1.0f
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingUploadUri: Uri? = null
 
     private val clearFlashRunnable = Runnable {
-        if (lanClient.getState() is ConnectionState.Connected) {
-            statusText.visibility = View.GONE
-        }
+        updateZoomBadge()
     }
 
     private val imagePickerLauncher = registerForActivityResult(
@@ -95,9 +101,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!keyboardUserHidden && settingsDialog?.isShowing != true) {
+        if (!prefs.tiktokMode && !keyboardUserHidden && settingsDialog?.isShowing != true) {
             remoteImeView.postDelayed({
-                if (settingsDialog?.isShowing != true) {
+                if (!prefs.tiktokMode && settingsDialog?.isShowing != true) {
                     remoteImeView.ensureKeyboardVisible(this)
                 }
             }, 120L)
@@ -106,9 +112,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && !keyboardUserHidden && settingsDialog?.isShowing != true) {
+        if (hasFocus && !prefs.tiktokMode && !keyboardUserHidden && settingsDialog?.isShowing != true) {
             remoteImeView.postDelayed({
-                if (settingsDialog?.isShowing != true) {
+                if (!prefs.tiktokMode && settingsDialog?.isShowing != true) {
                     remoteImeView.ensureKeyboardVisible(this)
                 }
             }, 80L)
@@ -117,7 +123,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Release any held mouse buttons and close socket cleanly when backgrounded.
+        // Release any held mouse buttons/zoom and close socket cleanly when backgrounded.
+        if (currentZoomLevel > 1.02f) {
+            currentZoomLevel = 1.0f
+            touchpadView.resetZoom()
+            lanClient.sendZoom(1.0f)
+        }
         for (btn in heldMouseButtons.toList()) {
             lanClient.sendMouseUp(btn)
         }
@@ -195,6 +206,26 @@ class MainActivity : AppCompatActivity() {
         }
         padFrame.addView(centerHint)
 
+        // Tiny top-left pill to switch between normal mode and TikTok / Shorts mode
+        tiktokToggleBtn = TextView(this).apply {
+            text = "▶ TikTok"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            setOnClickListener {
+                prefs.tiktokMode = !prefs.tiktokMode
+                applyTouchpadConfig()
+            }
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START,
+            ).apply {
+                leftMargin = dp(8)
+                topMargin = dp(8)
+            }
+        }
+        padFrame.addView(tiktokToggleBtn)
+
         // Tiny top-right status + settings gear (no navbar, pure function)
         val topRight = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -230,7 +261,12 @@ class MainActivity : AppCompatActivity() {
 
         topRight.setOnClickListener {
             val st = lanClient.getState()
-            if (st is ConnectionState.Disconnected && !prefs.lastHost.isNullOrBlank()) {
+            if (currentZoomLevel > 1.02f) {
+                currentZoomLevel = 1.0f
+                touchpadView.resetZoom()
+                lanClient.sendZoom(1.0f)
+                updateZoomBadge()
+            } else if (st is ConnectionState.Disconnected && !prefs.lastHost.isNullOrBlank()) {
                 lanClient.connect(prefs.lastHost!!, prefs.lastPort, prefs.lastServerName, userInitiated = true)
             } else {
                 openSettings()
@@ -303,15 +339,101 @@ class MainActivity : AppCompatActivity() {
         rootLayout.addView(mouseButtonsRow)
 
         // Subtle 1px divider above the PC quick-key strip
-        rootLayout.addView(View(this).apply {
+        quickStripDivider = View(this).apply {
+            setBackgroundColor(Color.parseColor("#18181B"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
+        }
+        rootLayout.addView(quickStripDivider)
+
+        // Slim dark PC-key strip directly above the always-active keyboard
+        quickStripView = buildQuickStrip()
+        rootLayout.addView(quickStripView)
+
+        // TikTok / Shorts bottom controls (replaces keyboard + strip when TikTok mode is active)
+        tiktokControls = buildTikTokControls()
+        rootLayout.addView(tiktokControls)
+
+        return rootLayout
+    }
+
+    private fun buildTikTokControls(): LinearLayout {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.BLACK)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+
+        container.addView(View(this).apply {
             setBackgroundColor(Color.parseColor("#18181B"))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
         })
 
-        // Slim dark PC-key strip directly above the always-active keyboard
-        rootLayout.addView(buildQuickStrip())
+        val miniCursorFrame = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#070709"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(82))
+        }
+        miniCursorPad = TouchpadView(this).apply {
+            setBackgroundColor(Color.parseColor("#070709"))
+            singleFingerScrollMode = false
+            multiFingerEnabled = false
+            tapToClickEnabled = true
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+        }
+        miniCursorFrame.addView(miniCursorPad)
+        miniCursorFrame.addView(TextView(this).apply {
+            text = "Cursor • tap to click Comments"
+            setTextColor(Color.parseColor("#3F3F46"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER,
+            )
+        })
+        container.addView(miniCursorFrame)
 
-        return rootLayout
+        container.addView(View(this).apply {
+            setBackgroundColor(Color.parseColor("#18181B"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
+        })
+
+        val actionsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#08080A"))
+            setPadding(dp(6), dp(5), dp(6), dp(6))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+        }
+
+        val actions = listOf(
+            StripItem("↑ Prev", "UP", isModifier = false),
+            StripItem("♥ Like", "L", isModifier = false),
+            StripItem("⏸ Play", "SPACE", isModifier = false),
+            StripItem("↓ Next", "DOWN", isModifier = false),
+        )
+        for (item in actions) {
+            actionsRow.addView(TextView(this).apply {
+                text = item.label
+                gravity = Gravity.CENTER
+                setTextColor(Color.parseColor("#A1A1AA"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                background = makeStripKeyBg(active = false)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    leftMargin = dp(3)
+                    rightMargin = dp(3)
+                }
+                setOnClickListener { lanClient.sendKey(item.keyCode) }
+            })
+        }
+        container.addView(actionsRow)
+        return container
     }
 
     private fun buildQuickStrip(): View {
@@ -493,7 +615,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindListeners() {
-        touchpadView.listener = object : TouchpadView.Listener {
+        val padListener = object : TouchpadView.Listener {
             override fun onMove(dxDp: Float, dyDp: Float) {
                 lanClient.sendMove(dxDp, dyDp)
             }
@@ -515,10 +637,18 @@ class MainActivity : AppCompatActivity() {
                 lanClient.sendScroll(dxDp, dyDp)
             }
 
+            override fun onZoomChanged(level: Float) {
+                currentZoomLevel = level
+                lanClient.sendZoom(level)
+                updateZoomBadge()
+            }
+
             override fun onTouchInteract() {
                 // Ensure IME stays focused without stealing attention unless closed.
             }
         }
+        touchpadView.listener = padListener
+        miniCursorPad.listener = padListener
 
         remoteImeView.inputListener = object : RemoteImeView.InputListener {
             override fun onText(text: String) {
@@ -575,13 +705,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyTouchpadConfig() {
+        val tiktok = prefs.tiktokMode
         touchpadView.sensitivity = prefs.sensitivity
         touchpadView.naturalScroll = prefs.naturalScroll
-        touchpadView.tapToClickEnabled = !prefs.buttonClickMode
-        val showSideBySide = prefs.buttonClickMode && !prefs.buttonLayoutStacked
-        val showLeftStacked = prefs.buttonClickMode && prefs.buttonLayoutStacked
+        touchpadView.singleFingerScrollMode = tiktok
+        touchpadView.tapToClickEnabled = tiktok || !prefs.buttonClickMode
+
+        miniCursorPad.sensitivity = prefs.sensitivity
+        miniCursorPad.naturalScroll = prefs.naturalScroll
+
+        val showSideBySide = !tiktok && prefs.buttonClickMode && !prefs.buttonLayoutStacked
+        val showLeftStacked = !tiktok && prefs.buttonClickMode && prefs.buttonLayoutStacked
         mouseButtonsRow.visibility = if (showSideBySide) View.VISIBLE else View.GONE
         leftStackedButtons.visibility = if (showLeftStacked) View.VISIBLE else View.GONE
+
+        quickStripDivider.visibility = if (tiktok) View.GONE else View.VISIBLE
+        quickStripView.visibility = if (tiktok) View.GONE else View.VISIBLE
+        tiktokControls.visibility = if (tiktok) View.VISIBLE else View.GONE
+
+        tiktokToggleBtn.setTextColor(
+            if (tiktok) Color.parseColor("#22D3EE") else Color.parseColor("#52525B")
+        )
+        tiktokToggleBtn.background = GradientDrawable().apply {
+            cornerRadius = 12f * resources.displayMetrics.density
+            setColor(if (tiktok) Color.parseColor("#11282F") else Color.parseColor("#09090B"))
+            setStroke(1, if (tiktok) Color.parseColor("#22D3EE") else Color.parseColor("#1D1D22"))
+        }
+
+        if (lastAppliedTiktokMode != tiktok) {
+            lastAppliedTiktokMode = tiktok
+            if (tiktok) {
+                remoteImeView.hideKeyboard(this)
+            } else if (!keyboardUserHidden && settingsDialog?.isShowing != true) {
+                remoteImeView.postDelayed({
+                    if (!prefs.tiktokMode && settingsDialog?.isShowing != true) {
+                        remoteImeView.ensureKeyboardVisible(this)
+                    }
+                }, 80L)
+            }
+        }
+
         applyKeepScreenOn(lanClient.getState())
     }
 
@@ -601,7 +764,7 @@ class MainActivity : AppCompatActivity() {
                     startImageUpload(queued)
                 } else {
                     mainHandler.removeCallbacks(clearFlashRunnable)
-                    statusText.visibility = View.GONE
+                    updateZoomBadge()
                 }
             }
 
@@ -620,9 +783,12 @@ class MainActivity : AppCompatActivity() {
             }
 
             is ConnectionState.Disconnected -> {
+                currentZoomLevel = 1.0f
+                touchpadView.resetZoom()
                 if (state.rejected) {
                     pendingUploadUri = null
                 }
+                statusText.setTextColor(Color.parseColor("#A1A1AA"))
                 dotDrawable?.setColor(
                     if (state.rejected) Color.parseColor("#F87171") else Color.parseColor("#52525B")
                 )
@@ -649,8 +815,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateZoomBadge() {
+        if (lanClient.getState() !is ConnectionState.Connected) return
+        mainHandler.removeCallbacks(clearFlashRunnable)
+        if (currentZoomLevel > 1.02f) {
+            statusText.text = String.format(Locale.US, "%.1fx ✕", currentZoomLevel)
+            statusText.setTextColor(Color.parseColor("#22D3EE"))
+            statusText.visibility = View.VISIBLE
+        } else {
+            statusText.setTextColor(Color.parseColor("#A1A1AA"))
+            statusText.visibility = View.GONE
+        }
+    }
+
     private fun flashStatus(message: String, autoClear: Boolean) {
         mainHandler.removeCallbacks(clearFlashRunnable)
+        statusText.setTextColor(Color.parseColor("#A1A1AA"))
         statusText.text = message
         statusText.visibility = View.VISIBLE
         if (autoClear) {
@@ -675,9 +855,13 @@ class MainActivity : AppCompatActivity() {
             onTouchpadConfigChanged = { applyTouchpadConfig() },
             onClosed = {
                 settingsDialog = null
-                remoteImeView.postDelayed({
-                    remoteImeView.ensureKeyboardVisible(this)
-                }, 100L)
+                if (!prefs.tiktokMode && !keyboardUserHidden) {
+                    remoteImeView.postDelayed({
+                        if (!prefs.tiktokMode) {
+                            remoteImeView.ensureKeyboardVisible(this)
+                        }
+                    }, 100L)
+                }
             },
         ).also { it.show() }
     }

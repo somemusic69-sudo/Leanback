@@ -66,6 +66,9 @@ test("Server pairing, token trust, rejection, and UDP discovery", async () => {
 
   const mockWithRelease = {
     ...mockDriver,
+    setZoom: (level) => actions.push(["zoom", level]),
+    zoomStart: () => actions.push(["zoomStart"]),
+    zoomEnd: () => actions.push(["zoomEnd"]),
     releaseAll: () => {
       releaseAllCalls++;
     },
@@ -99,10 +102,14 @@ test("Server pairing, token trust, rejection, and UDP discovery", async () => {
 
     c1.ws.send(JSON.stringify({ type: "move", dx: 5, dy: -3 }));
     c1.ws.send(JSON.stringify({ type: "text", text: "hi" }));
+    c1.ws.send(JSON.stringify({ type: "zoom", level: 2.4 }));
+    c1.ws.send(JSON.stringify({ type: "zoomEnd" }));
     await new Promise((r) => setTimeout(r, 30));
     assert.deepEqual(actions, [
       ["move", 5, -3],
       ["text", "hi"],
+      ["zoom", 2.4],
+      ["zoomEnd"],
     ]);
     c1.ws.close();
     await new Promise((r) => setTimeout(r, 20));

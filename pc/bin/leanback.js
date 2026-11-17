@@ -23,6 +23,7 @@ function printHelp() {
   Options:
     -p, --port <port>         WebSocket port (default: ${DEFAULT_WS_PORT})
     -s, --speed <multiplier>  Cursor speed multiplier, 0.2 - 5.0 (default: 1.0)
+    -z, --zoom <level>        2-finger hold zoom factor, 1.3 - 5.0 (default: 2.2)
         --always-ask          Always ask [Y/n] on PC before allowing control
         --no-discovery        Disable UDP LAN auto-discovery
         --no-clipboard        Save uploaded images without copying to clipboard
@@ -38,6 +39,7 @@ function parseArgs(argv) {
     target: null,
     port: DEFAULT_WS_PORT,
     speed: 1.0,
+    zoom: 2.2,
     alwaysAsk: false,
     discovery: true,
     clipboard: true,
@@ -79,6 +81,14 @@ function parseArgs(argv) {
         throw new Error(`Invalid speed multiplier (expected 0.2 - 5.0): ${args[i] ?? ""}`);
       }
       opts.speed = next;
+      continue;
+    }
+    if (arg === "-z" || arg === "--zoom") {
+      const next = Number(args[++i]);
+      if (!Number.isFinite(next) || next < 1.3 || next > 5.0) {
+        throw new Error(`Invalid zoom factor (expected 1.3 - 5.0): ${args[i] ?? ""}`);
+      }
+      opts.zoom = next;
       continue;
     }
     if (!arg.startsWith("-") && opts.command === "serve") {
@@ -148,7 +158,7 @@ async function main() {
     return;
   }
 
-  const driver = createInputDriver({ speed: opts.speed });
+  const driver = createInputDriver({ speed: opts.speed, zoom: opts.zoom });
   const ips = getLocalIPv4Addresses();
   const ui = createTerminalUI({
     port: opts.port,

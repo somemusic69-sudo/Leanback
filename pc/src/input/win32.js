@@ -57,6 +57,8 @@ export const VK_MAP = Object.freeze({
   F10: 0x79,
   F11: 0x7a,
   F12: 0x7b,
+  OEM_PLUS: 0xbb,
+  OEM_MINUS: 0xbd,
   VOLUME_MUTE: 0xad,
   VOLUME_DOWN: 0xae,
   VOLUME_UP: 0xaf,
@@ -113,10 +115,37 @@ export function applyPointerAcceleration(dx, dy, speedMultiplier = 1.0) {
   return { x: dx * scale, y: dy * scale };
 }
 
+/**
+ * Compute clamped top-left viewport offset to center Windows Magnifier around (cursorX, cursorY).
+ */
+export function computeMagnifierOffset(
+  cursorX,
+  cursorY,
+  magLevel,
+  bounds = { left: 0, top: 0, width: 1920, height: 1080 }
+) {
+  const safeLevel = Math.max(1.0, magLevel);
+  const viewW = bounds.width / safeLevel;
+  const viewH = bounds.height / safeLevel;
+  const maxX = bounds.left + Math.max(0, bounds.width - viewW);
+  const maxY = bounds.top + Math.max(0, bounds.height - viewH);
+  const rawX = cursorX - viewW / 2;
+  const rawY = cursorY - viewH / 2;
+  return {
+    x: Math.round(Math.max(bounds.left, Math.min(maxX, rawX))),
+    y: Math.round(Math.max(bounds.top, Math.min(maxY, rawY))),
+  };
+}
+
 let win32Bindings = null;
 
 function getWin32Bindings() {
   if (win32Bindings) return win32Bindings;
+
+  const POINT = koffi.struct("POINT", {
+    x: "int32",
+    y: "int32",
+  });
 
   const MOUSEINPUT = koffi.struct("MOUSEINPUT", {
     dx: "int32",
@@ -163,9 +192,28 @@ function getWin32Bindings() {
   const SendInput = user32.func(
     "uint32 __stdcall SendInput(uint32 cInputs, INPUT *pInputs, int32 cbSize)"
   );
+  const GetCursorPos = user32.func("bool __stdcall GetCursorPos(_Out_ POINT *lpPoint)");
+  const GetSystemMetrics = user32.func("int32 __stdcall GetSystemMetrics(int32 nIndex)");
+
+  let magBindings = null;
+  try {
+    const magnification = koffi.load("Magnification.dll");
+    magBindings = {
+      MagInitialize: magnification.func("bool __stdcall MagInitialize()"),
+      MagUninitialize: magnification.func("bool __stdcall MagUninitialize()"),
+      MagSetFullscreenTransform: magnification.func(
+        "bool __stdcall MagSetFullscreenTransform(float magLevel, int32 xOffset, int32 yOffset)"
+      ),
+    };
+  } catch {
+    magBindings = null;
+  }
 
   win32Bindings = {
     SendInput,
+    GetCursorPos,
+    GetSystemMetrics,
+    mag: magBindings,
     inputSize: koffi.sizeof(INPUT),
   };
   return win32Bindings;
@@ -213,14 +261,19 @@ function makeVkEvents(vk, isKeyUp = false) {
 export class Win32InputDriver {
   /**
    * @param {number} [speedMultiplier=1.0]
+   * @param {number} [zoomLevel=2.2]
    */
-  constructor(speedMultiplier = 1.0) {
+  constructor(speedMultiplier = 1.0, zoomLevel = 2.2) {
     this.speedMultiplier = speedMultiplier;
+    this.defaultZoomLevel = Math.max(1.3, Math.min(5.0, zoomLevel));
+    this.currentZoomLevel = 1.0;
     this.remX = 0;
     this.remY = 0;
     this.remScrollX = 0;
     this.remScrollY = 0;
     this.heldButtons = new Set();
+    this.zoomActive = false;
+    this.magInitialized = false;
     this.bindings = getWin32Bindings();
   }
 
@@ -238,7 +291,11 @@ export class Win32InputDriver {
   }
 
   moveMouse(dx, dy) {
-    const scaled = applyPointerAcceleration(dx, dy, this.speedMultiplier);
+    // Scale cursor speed smoothly as zoom increases so inspecting small targets stays precise.
+    const effectiveSpeed = this.zoomActive
+      ? this.speedMultiplier / Math.sqrt(Math.max(1.0, this.currentZoomLevel))
+      : this.speedMultiplier;
+    const scaled = applyPointerAcceleration(dx, dy, effectiveSpeed);
     this.remX += scaled.x;
     this.remY += scaled.y;
 
@@ -249,6 +306,9 @@ export class Win32InputDriver {
 
     if (ix === 0 && iy === 0) return;
     this.#send([makeMouseInput(MOUSEEVENTF_MOVE, ix, iy, 0)]);
+    if (this.zoomActive && this.magInitialized) {
+      this.#updateMagnifierCenter();
+    }
   }
 
   mouseDown(button = "left") {
@@ -275,7 +335,78 @@ export class Win32InputDriver {
     this.#send([makeMouseInput(flag)]);
   }
 
+  #updateMagnifierCenter() {
+    const mag = this.bindings.mag;
+    if (!mag || !this.magInitialized) return;
+
+    const screenW = Math.max(1, this.bindings.GetSystemMetrics(0) || 1920);
+    const screenH = Math.max(1, this.bindings.GetSystemMetrics(1) || 1080);
+    const pt = {};
+    const ok = this.bindings.GetCursorPos(pt);
+    const cx = ok ? pt.x : Math.round(screenW / 2);
+    const cy = ok ? pt.y : Math.round(screenH / 2);
+
+    const level = Math.max(1.0, this.currentZoomLevel);
+    const offset = computeMagnifierOffset(cx, cy, level, {
+      left: 0,
+      top: 0,
+      width: screenW,
+      height: screenH,
+    });
+    mag.MagSetFullscreenTransform(level, offset.x, offset.y);
+  }
+
+  setZoom(level) {
+    const clamped = Number.isFinite(level) ? Math.max(1.0, Math.min(5.0, level)) : 1.0;
+    if (clamped <= 1.02) {
+      this.zoomEnd();
+      return;
+    }
+
+    const wasActive = this.zoomActive;
+    this.currentZoomLevel = clamped;
+    this.zoomActive = true;
+
+    const mag = this.bindings.mag;
+    if (mag && (this.magInitialized || mag.MagInitialize())) {
+      this.magInitialized = true;
+      this.#updateMagnifierCenter();
+      return;
+    }
+
+    if (!wasActive) {
+      this.#sendCombo([VK_MAP.WIN], VK_MAP.OEM_PLUS);
+    }
+  }
+
+  zoomStart() {
+    if (this.zoomActive) return;
+    this.setZoom(this.defaultZoomLevel);
+  }
+
+  zoomEnd() {
+    this.currentZoomLevel = 1.0;
+    if (!this.zoomActive) return;
+    this.zoomActive = false;
+
+    const mag = this.bindings.mag;
+    if (mag && this.magInitialized) {
+      try {
+        mag.MagSetFullscreenTransform(1.0, 0, 0);
+      } finally {
+        mag.MagUninitialize();
+        this.magInitialized = false;
+      }
+      return;
+    }
+
+    this.#sendCombo([VK_MAP.WIN], VK_MAP.ESC);
+  }
+
   releaseAll() {
+    if (this.zoomActive) {
+      this.zoomEnd();
+    }
     if (this.heldButtons.size === 0) return;
     for (const button of [...this.heldButtons]) {
       this.mouseUp(button);

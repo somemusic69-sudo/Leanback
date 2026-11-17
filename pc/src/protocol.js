@@ -94,6 +94,22 @@ export function handleInputMessage(msg, driver, sendReply) {
       break;
     }
 
+    case "zoom": {
+      const level = clampNumber(msg.level, 1.0, 5.0, 1.0);
+      driver.setZoom?.(level);
+      break;
+    }
+
+    case "zoomStart": {
+      driver.zoomStart?.();
+      break;
+    }
+
+    case "zoomEnd": {
+      driver.zoomEnd?.();
+      break;
+    }
+
     case "ping": {
       sendReply({ type: "pong", ts: msg.ts ?? Date.now() });
       break;

@@ -2,17 +2,19 @@ package com.leanback.app
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Color
 import android.text.Editable
 import android.text.InputType
 import android.text.Selection
-import android.text.SpannableStringBuilder
+import android.text.TextWatcher
 import android.util.AttributeSet
 import android.view.KeyEvent
-import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.view.inputmethod.InputMethodManager
+import androidx.appcompat.widget.AppCompatEditText
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -52,7 +54,7 @@ object TextDiffCalculator {
 class RemoteImeView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
-) : View(context, attrs) {
+) : AppCompatEditText(context, attrs) {
 
     interface InputListener {
         fun onText(text: String)
@@ -62,25 +64,77 @@ class RemoteImeView @JvmOverloads constructor(
     }
 
     var inputListener: InputListener? = null
-    private val buffer = SpannableStringBuilder()
     private var lastSnapshot = ""
+    private var suppressWatcher = false
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
-    }
-
-    override fun onCheckIsTextEditor(): Boolean = true
-
-    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT
-        outAttrs.imeOptions = (
+        isCursorVisible = false
+        isLongClickable = false
+        setTextIsSelectable(false)
+        background = null
+        setPadding(0, 0, 0, 0)
+        setTextColor(Color.TRANSPARENT)
+        alpha = 0f
+        inputType = (
+            InputType.TYPE_CLASS_TEXT
+                or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
+                or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            )
+        imeOptions = (
             EditorInfo.IME_ACTION_NONE
                 or EditorInfo.IME_FLAG_NO_ENTER_ACTION
                 or EditorInfo.IME_FLAG_NO_FULLSCREEN
                 or EditorInfo.IME_FLAG_NO_EXTRACT_UI
             )
-        return RemoteInputConnection(this)
+
+        addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+            override fun afterTextChanged(s: Editable?) {
+                if (suppressWatcher || s == null) return
+                val current = s.toString()
+                val diff = TextDiffCalculator.computeDiff(lastSnapshot, current)
+                if (diff.backspaces > 0) {
+                    inputListener?.onKey("BACKSPACE", diff.backspaces)
+                }
+                if (diff.appendText.isNotEmpty()) {
+                    inputListener?.onText(diff.appendText)
+                }
+                lastSnapshot = current
+
+                if (diff.appendText.endsWith("\n")) {
+                    post { resetBuffer() }
+                    return
+                }
+
+                // Keep buffer bounded at word boundaries without breaking active composing spans.
+                if (s.length > 100 && BaseInputConnection.getComposingSpanStart(s) == -1) {
+                    val targetCut = s.length - 50
+                    val spaceIdx = s.lastIndexOf(' ', targetCut)
+                    val cut = if (spaceIdx > 0) spaceIdx + 1 else targetCut
+                    suppressWatcher = true
+                    s.delete(0, cut)
+                    lastSnapshot = s.toString()
+                    Selection.setSelection(s, s.length)
+                    suppressWatcher = false
+                }
+            }
+        })
+    }
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        val base = super.onCreateInputConnection(outAttrs) ?: return null
+        outAttrs.imeOptions = (
+            outAttrs.imeOptions
+                or EditorInfo.IME_ACTION_NONE
+                or EditorInfo.IME_FLAG_NO_ENTER_ACTION
+                or EditorInfo.IME_FLAG_NO_FULLSCREEN
+                or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            )
+        return RemoteInputConnectionWrapper(base)
     }
 
     fun ensureKeyboardVisible(activity: Activity) {
@@ -97,63 +151,32 @@ class RemoteImeView @JvmOverloads constructor(
     }
 
     fun resetBuffer() {
-        buffer.clear()
-        Selection.setSelection(buffer, 0)
+        val currentText = text
+        if (currentText.isNullOrEmpty() && lastSnapshot.isEmpty()) return
+        suppressWatcher = true
+        setText("")
         lastSnapshot = ""
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.restartInput(this)
+        suppressWatcher = false
     }
 
-    private fun syncBufferDiff() {
-        val current = buffer.toString()
-        val diff = TextDiffCalculator.computeDiff(lastSnapshot, current)
-        if (diff.backspaces > 0) {
-            inputListener?.onKey("BACKSPACE", diff.backspaces)
-        }
-        if (diff.appendText.isNotEmpty()) {
-            inputListener?.onText(diff.appendText)
-        }
-        lastSnapshot = current
-
-        // Trim old committed prefix silently so long typing sessions stay bounded.
-        if (buffer.length > 80 && BaseInputConnection.getComposingSpanStart(buffer) == -1) {
-            val drop = buffer.length - 40
-            buffer.delete(0, drop)
-            lastSnapshot = buffer.toString()
-            Selection.setSelection(buffer, buffer.length)
-        }
-    }
-
-    private inner class RemoteInputConnection(targetView: View) :
-        BaseInputConnection(targetView, true) {
-
-        override fun getEditable(): Editable = buffer
+    private inner class RemoteInputConnectionWrapper(target: InputConnection) :
+        InputConnectionWrapper(target, true) {
 
         override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
             if (handleModifierShortcut(text)) return true
-            val ok = super.setComposingText(text, newCursorPosition)
-            syncBufferDiff()
-            return ok
+            return super.setComposingText(text, newCursorPosition)
         }
 
         override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
             if (handleModifierShortcut(text)) return true
-            val ok = super.commitText(text, newCursorPosition)
-            syncBufferDiff()
-            return ok
-        }
-
-        override fun finishComposingText(): Boolean {
-            val ok = super.finishComposingText()
-            syncBufferDiff()
-            return ok
+            return super.commitText(text, newCursorPosition)
         }
 
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            val cursor = Selection.getSelectionStart(buffer).coerceAtLeast(0)
-            val missingBefore = (beforeLength - cursor).coerceAtLeast(0)
+            val editable = text
+            val selStart = if (editable != null) Selection.getSelectionStart(editable).coerceAtLeast(0) else 0
+            val missingBefore = (beforeLength - selStart).coerceAtLeast(0)
             val ok = super.deleteSurroundingText(beforeLength, afterLength)
-            syncBufferDiff()
             if (missingBefore > 0) {
                 inputListener?.onKey("BACKSPACE", missingBefore)
             }
@@ -161,33 +184,48 @@ class RemoteImeView @JvmOverloads constructor(
         }
 
         override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
-            val cursor = Selection.getSelectionStart(buffer).coerceAtLeast(0)
-            val existingCodePoints = if (cursor > 0) {
-                Character.codePointCount(buffer, 0, cursor)
+            val editable = text
+            val selStart = if (editable != null) Selection.getSelectionStart(editable).coerceAtLeast(0) else 0
+            val existingCodePoints = if (editable != null && selStart > 0) {
+                Character.codePointCount(editable, 0, selStart)
             } else {
                 0
             }
             val missingBefore = (beforeLength - existingCodePoints).coerceAtLeast(0)
             val ok = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
-            syncBufferDiff()
             if (missingBefore > 0) {
                 inputListener?.onKey("BACKSPACE", missingBefore)
             }
             return ok
         }
 
+        override fun performEditorAction(editorAction: Int): Boolean {
+            inputListener?.onKey("ENTER", 1)
+            resetBuffer()
+            return true
+        }
+
         override fun sendKeyEvent(event: KeyEvent): Boolean {
+            if (event.action == KeyEvent.ACTION_UP) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_TAB,
+                    KeyEvent.KEYCODE_ESCAPE,
+                    KeyEvent.KEYCODE_DPAD_UP,
+                    KeyEvent.KEYCODE_DPAD_DOWN,
+                    KeyEvent.KEYCODE_DPAD_LEFT,
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+                }
+            }
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_DEL -> {
-                        val cursor = Selection.getSelectionStart(buffer).coerceAtLeast(0)
-                        if (cursor > 0) {
-                            val start = Character.offsetByCodePoints(buffer, cursor, -1)
-                            buffer.delete(start, cursor)
-                            lastSnapshot = buffer.toString()
+                        val editable = text
+                        val selStart = if (editable != null) Selection.getSelectionStart(editable) else 0
+                        if (editable.isNullOrEmpty() || selStart <= 0) {
+                            inputListener?.onKey("BACKSPACE", 1)
+                            return true
                         }
-                        inputListener?.onKey("BACKSPACE", 1)
-                        return true
                     }
 
                     KeyEvent.KEYCODE_ENTER -> {
@@ -230,11 +268,8 @@ class RemoteImeView @JvmOverloads constructor(
 
                     else -> {
                         val ch = event.unicodeChar
-                        if (ch != 0) {
-                            val str = String(Character.toChars(ch))
-                            if (!handleModifierShortcut(str)) {
-                                inputListener?.onText(str)
-                            }
+                        if (ch != 0 && inputListener?.hasShortcutModifier() == true) {
+                            handleModifierShortcut(String(Character.toChars(ch)))
                             return true
                         }
                     }

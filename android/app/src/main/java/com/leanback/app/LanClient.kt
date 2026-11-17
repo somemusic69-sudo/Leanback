@@ -308,6 +308,28 @@ class LanClient(
         sendConnected(json)
     }
 
+    fun sendZoom(level: Float) {
+        val ws = socket ?: return
+        if (currentState !is ConnectionState.Connected) return
+        val clamped = level.coerceIn(1.0f, 5.0f)
+        // Allow non-reset zoom updates to drop if Wi-Fi stalls, but never drop reset (1.0x).
+        if (clamped > 1.02f && ws.queueSize() > 32 * 1024) return
+        ws.send(
+            JSONObject()
+                .put("type", "zoom")
+                .put("level", clamped.toDouble())
+                .toString()
+        )
+    }
+
+    fun sendZoomStart() {
+        sendConnected(JSONObject().put("type", "zoomStart"))
+    }
+
+    fun sendZoomEnd() {
+        sendConnected(JSONObject().put("type", "zoomEnd"))
+    }
+
     private fun sendConnected(payload: JSONObject) {
         val ws = socket ?: return
         if (currentState !is ConnectionState.Connected) return

@@ -26,6 +26,7 @@ No unsigned `.exe` downloads. Run one command on your PC, open the pure-black ap
 - **Pure function, zero clutter** — No navbar or top bar. Just a black touchpad on top and your familiar phone keyboard (with swipe typing, autocorrect, and emojis) always ready at the bottom.
 - **Two Click Modes** — Tap directly on the touchpad *(default)*, or switch to **Click buttons** in `⚙` Settings for `Left` / `Right` buttons (side-by-side or `1:1` square `Right` over `Left` on the bottom-left).
 - **Send photos straight to PC** — Tap the subtle image icon in the top-right corner to pick a photo from your phone; it saves to `Downloads\LeanBack` and copies straight to your PC clipboard ready for `Ctrl+V`.
+- **TikTok / Shorts Mode** — Tap the tiny **`▶ TikTok`** pill in the top-left (or toggle in Settings) to hide the keyboard and quick keys so 1-finger dragging scrolls feeds/comments, double-tapping likes (`double-click`), and a compact bottom `Cursor` pad + `↑ / ♥ / ⏸ / ↓` buttons let you open Comments without leaving the mode.
 - **Safe LAN pairing** — Auto-discovers your PC over Wi-Fi, then asks `[Y]es & remember / [s]ession only / [n]o` on the PC terminal with a 4-digit verification code.
 
 ---
@@ -64,7 +65,7 @@ Switch between modes anytime in **`⚙` Settings → Click Mode**:
 | **Tap touchpad** *(default)* | 1-finger tap = Left click, double-tap & hold = Drag, 2-finger tap = Right click, 3-finger tap = Middle click |
 | **Click buttons** | Touchpad only moves cursor & scrolls (no tap-clicks or accidental double-taps). Choose **Side-by-side** (`Left` \| `Right`) or **Left side** (`1:1` square `Right` over `Left` column on the bottom-left, keeping the right side open as touchpad). Hold `Left` + slide pad to drag. |
 
-**Always active on both modes:** `1-finger slide` moves cursor, `2-finger slide` scrolls.
+**Always active on both modes:** `1-finger slide` moves cursor, `2-finger slide` scrolls, and **2-finger pinch** smoothly zooms your PC screen (`1.0x`–`5.0x` based on finger distance via Windows Magnification API — pinch back together or tap the `2.2x ✕` badge to reset).
 
 ---
 
@@ -74,6 +75,7 @@ Switch between modes anytime in **`⚙` Settings → Click Mode**:
 leanback                    Start server on port 7890
 leanback --port 8080        Use custom WebSocket port
 leanback --speed 1.4        Cursor speed multiplier (0.2 - 5.0)
+leanback --zoom 2.5         2-finger hold zoom factor (1.3 - 5.0, default: 2.2)
 leanback --always-ask       Require [Y/n] PC approval on every connection
 leanback --no-discovery     Disable UDP LAN auto-discovery (7891/udp)
 leanback --no-clipboard     Save uploaded photos without copying to clipboard

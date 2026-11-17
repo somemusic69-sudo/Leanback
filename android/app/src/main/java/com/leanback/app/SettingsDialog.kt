@@ -511,6 +511,11 @@ class SettingsDialog(
         refreshClickModeUi()
         root.addView(modeHintView)
 
+        root.addView(makeSwitchRow("TikTok / Shorts mode (scroll + double-tap like)", prefs.tiktokMode) { checked ->
+            prefs.tiktokMode = checked
+            onTouchpadConfigChanged()
+        })
+
         root.addView(makeSwitchRow("Natural scroll (phone-style)", prefs.naturalScroll) { checked ->
             prefs.naturalScroll = checked
             onTouchpadConfigChanged()

@@ -98,4 +98,7 @@ Authenticated clients receive a per-session `uploadToken` in `welcome` and can s
 | `scroll` | `dx: number`, `dy: number` | Horizontal / vertical wheel delta |
 | `text` | `text: string`, `modifiers?: string[]` | Unicode text or modifier shortcut (`["CTRL"]` + `"c"`) |
 | `key` | `key: string`, `modifiers?: string[]`, `repeat?: number` | Named key (`BACKSPACE`, `ENTER`, `TAB`, `ESC`, `LEFT`, `UP`, `DOWN`, `RIGHT`, `WIN`, etc.) |
+| `zoom` | `level: number` | Set fullscreen Windows Magnification (`1.0` to `5.0`) around cursor |
+| `zoomStart` | *(none)* | Engage default fullscreen Windows Magnification around cursor |
+| `zoomEnd` | *(none)* | Reset Windows Magnification back to `1.0x` |
 | `ping` | `ts?: number` | Optional latency check (`pong` reply) |
