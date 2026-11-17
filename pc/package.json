@@ -27,6 +27,15 @@
     "leanback"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/somemusic69-sudo/LeanBack.git",
+    "directory": "pc"
+  },
+  "homepage": "https://github.com/somemusic69-sudo/LeanBack#readme",
+  "bugs": {
+    "url": "https://github.com/somemusic69-sudo/LeanBack/issues"
+  },
   "engines": {
     "node": ">=18.0.0"
   },

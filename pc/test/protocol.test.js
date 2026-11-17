@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleInputMessage } from "../src/protocol.js";
+import { handleInputMessage, sanitizeLabel } from "../src/protocol.js";
 import { applyPointerAcceleration, charToVk, VK_MAP } from "../src/input/win32.js";
 
 test("handleInputMessage clamps deltas and dispatches driver calls", () => {
@@ -44,4 +44,9 @@ test("Win32 helpers map virtual keys and apply non-linear pointer acceleration",
   const fast = applyPointerAcceleration(30, 0, 1.0);
   assert.ok(slow.x > 1 && slow.x < 1.2);
   assert.ok(fast.x / 30 > slow.x / 1);
+});
+
+test("sanitizeLabel strips terminal ANSI escape sequences and control chars", () => {
+  assert.equal(sanitizeLabel("\x1b[31mEvil\x1b[0m\nPhone\x07"), "Evil Phone");
+  assert.equal(sanitizeLabel("   \n\t  "), "Android Phone");
 });

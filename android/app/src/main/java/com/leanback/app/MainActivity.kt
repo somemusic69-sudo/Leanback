@@ -90,9 +90,16 @@ class MainActivity : AppCompatActivity() {
             lanClient.sendMouseUp(btn)
         }
         heldMouseButtons.clear()
+        populateMouseButtonsRow()
         if (!isChangingConfigurations) {
             lanClient.disconnect(manual = false)
         }
+    }
+
+    override fun onDestroy() {
+        settingsDialog?.dismiss()
+        settingsDialog = null
+        super.onDestroy()
     }
 
     private fun buildMainView(): View {
@@ -306,18 +313,28 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildMouseButtonsRow(): LinearLayout {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        mouseButtonsRow = LinearLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             isMotionEventSplittingEnabled = true
             setPadding(dp(6), dp(2), dp(6), dp(6))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(46),
-            )
         }
+        populateMouseButtonsRow()
+        return mouseButtonsRow
+    }
 
-        fun makeClickButton(label: String, buttonName: String): TextView {
+    @SuppressLint("ClickableViewAccessibility")
+    private fun populateMouseButtonsRow() {
+        if (!::mouseButtonsRow.isInitialized) return
+        mouseButtonsRow.removeAllViews()
+
+        val stacked = prefs.buttonLayoutStacked
+        mouseButtonsRow.orientation = if (stacked) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        mouseButtonsRow.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            if (stacked) dp(84) else dp(46),
+        )
+
+        fun makeClickButton(label: String, buttonName: String, params: LinearLayout.LayoutParams): TextView {
             fun applyStyle(pressed: Boolean, view: TextView) {
                 view.setTextColor(
                     if (pressed) Color.parseColor("#22D3EE") else Color.parseColor("#71717A")
@@ -337,9 +354,7 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 applyStyle(false, this)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                    if (buttonName == "left") rightMargin = dp(6)
-                }
+                layoutParams = params
                 setOnTouchListener { v, event ->
                     when (event.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
@@ -365,9 +380,41 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        row.addView(makeClickButton("Left", "left"))
-        row.addView(makeClickButton("Right", "right"))
-        return row
+        if (stacked) {
+            mouseButtonsRow.addView(
+                makeClickButton(
+                    "Right",
+                    "right",
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)).apply {
+                        bottomMargin = dp(4)
+                    }
+                )
+            )
+            mouseButtonsRow.addView(
+                makeClickButton(
+                    "Left",
+                    "left",
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40))
+                )
+            )
+        } else {
+            mouseButtonsRow.addView(
+                makeClickButton(
+                    "Left",
+                    "left",
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                        rightMargin = dp(6)
+                    }
+                )
+            )
+            mouseButtonsRow.addView(
+                makeClickButton(
+                    "Right",
+                    "right",
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                )
+            )
+        }
     }
 
     private fun bindListeners() {
@@ -456,6 +503,7 @@ class MainActivity : AppCompatActivity() {
         touchpadView.sensitivity = prefs.sensitivity
         touchpadView.naturalScroll = prefs.naturalScroll
         touchpadView.tapToClickEnabled = !prefs.buttonClickMode
+        populateMouseButtonsRow()
         mouseButtonsRow.visibility = if (prefs.buttonClickMode) View.VISIBLE else View.GONE
         applyKeepScreenOn(lanClient.getState())
     }

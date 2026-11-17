@@ -45,7 +45,7 @@ npx leanback
 
 ### 2. Install & Connect on Android
 
-1. Download the APK from [Releases](../../releases) (or build from `android/`).
+1. Download the APK from [Releases](https://github.com/somemusic69-sudo/LeanBack/releases) (or build from `android/`).
 2. Open **LeanBack** on the same Wi-Fi and tap the **`⚙`** icon in the top-right corner.
 3. Tap your PC under **Nearby PCs** (or enter `IP:Port` manually).
 4. Press **`Y`** (or **`Enter`**) on your PC terminal to trust the phone.
@@ -61,7 +61,7 @@ Switch between modes anytime in **`⚙` Settings → Click Mode**:
 | Mode | Behavior |
 | :--- | :--- |
 | **Tap touchpad** *(default)* | 1-finger tap = Left click, double-tap & hold = Drag, 2-finger tap = Right click, 3-finger tap = Middle click |
-| **Click buttons** | Touchpad only moves cursor & scrolls (no tap-clicks or accidental double-taps). Use the `Left` / `Right` buttons below the pad (hold `Left` + slide pad to drag). |
+| **Click buttons** | Touchpad only moves cursor & scrolls (no tap-clicks or accidental double-taps). Use the `Left` / `Right` buttons below the pad (supports **Side-by-side** or **Right over Left** stacked layout; hold `Left` + slide pad to drag). |
 
 **Always active on both modes:** `1-finger slide` moves cursor, `2-finger slide` scrolls.
 

@@ -60,15 +60,23 @@ test("Server pairing, token trust, rejection, and UDP discovery", async () => {
   };
 
   let approverCalls = 0;
+  let releaseAllCalls = 0;
   let nextDecision = "trust";
   const discoveryPort = 47891;
+
+  const mockWithRelease = {
+    ...mockDriver,
+    releaseAll: () => {
+      releaseAllCalls++;
+    },
+  };
 
   const srv = await startServer({
     port: 0,
     host: "127.0.0.1",
     discoveryPort,
     trustStore,
-    driver: mockDriver,
+    driver: mockWithRelease,
     approver: async ({ code }) => {
       approverCalls++;
       assert.match(code, /^\d{4}$/);
@@ -151,6 +159,8 @@ test("Server pairing, token trust, rejection, and UDP discovery", async () => {
     assert.equal(welcome4.trusted, false);
     assert.equal(welcome4.token, undefined);
     c4.ws.close();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.ok(releaseAllCalls >= 1);
   } finally {
     await srv.close();
     fs.rmSync(tmpDir, { recursive: true, force: true });

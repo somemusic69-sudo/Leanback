@@ -220,6 +220,7 @@ export class Win32InputDriver {
     this.remY = 0;
     this.remScrollX = 0;
     this.remScrollY = 0;
+    this.heldButtons = new Set();
     this.bindings = getWin32Bindings();
   }
 
@@ -251,23 +252,34 @@ export class Win32InputDriver {
   }
 
   mouseDown(button = "left") {
+    const normalized = button === "right" || button === "middle" ? button : "left";
+    this.heldButtons.add(normalized);
     const flag =
-      button === "right"
+      normalized === "right"
         ? MOUSEEVENTF_RIGHTDOWN
-        : button === "middle"
+        : normalized === "middle"
           ? MOUSEEVENTF_MIDDLEDOWN
           : MOUSEEVENTF_LEFTDOWN;
     this.#send([makeMouseInput(flag)]);
   }
 
   mouseUp(button = "left") {
+    const normalized = button === "right" || button === "middle" ? button : "left";
+    this.heldButtons.delete(normalized);
     const flag =
-      button === "right"
+      normalized === "right"
         ? MOUSEEVENTF_RIGHTUP
-        : button === "middle"
+        : normalized === "middle"
           ? MOUSEEVENTF_MIDDLEUP
           : MOUSEEVENTF_LEFTUP;
     this.#send([makeMouseInput(flag)]);
+  }
+
+  releaseAll() {
+    if (this.heldButtons.size === 0) return;
+    for (const button of [...this.heldButtons]) {
+      this.mouseUp(button);
+    }
   }
 
   click(button = "left") {
@@ -317,9 +329,13 @@ export class Win32InputDriver {
   typeText(text, modifiers = []) {
     if (!text) return;
 
-    const modVks = (Array.isArray(modifiers) ? modifiers : [])
-      .map((m) => VK_MAP[String(m).toUpperCase()])
-      .filter((vk) => vk != null);
+    const modVks = [
+      ...new Set(
+        (Array.isArray(modifiers) ? modifiers : [])
+          .map((m) => VK_MAP[String(m).toUpperCase()])
+          .filter((vk) => vk != null)
+      ),
+    ];
 
     // When Ctrl, Alt, or Win is held, Windows ignores KEYEVENTF_UNICODE, so dispatch VK combos instead.
     const hasShortcutMod = modVks.some(
@@ -371,9 +387,13 @@ export class Win32InputDriver {
     const vk = VK_MAP[upper] ?? (keyName?.length === 1 ? charToVk(keyName) : null);
     if (vk == null) return;
 
-    const modVks = (Array.isArray(modifiers) ? modifiers : [])
-      .map((m) => VK_MAP[String(m).toUpperCase()])
-      .filter((mVk) => mVk != null && mVk !== vk);
+    const modVks = [
+      ...new Set(
+        (Array.isArray(modifiers) ? modifiers : [])
+          .map((m) => VK_MAP[String(m).toUpperCase()])
+          .filter((mVk) => mVk != null && mVk !== vk)
+      ),
+    ];
 
     const count = Math.max(1, Math.min(20, Math.trunc(repeat) || 1));
     for (let i = 0; i < count; i++) {

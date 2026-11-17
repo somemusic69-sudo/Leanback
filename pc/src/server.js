@@ -1,7 +1,7 @@
 import os from "node:os";
 import crypto from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
-import { DEFAULT_WS_PORT, handleInputMessage } from "./protocol.js";
+import { DEFAULT_WS_PORT, handleInputMessage, sanitizeLabel } from "./protocol.js";
 import { startDiscoveryResponder, getLocalIPv4Addresses } from "./discovery.js";
 
 function normalizeIp(raw) {
@@ -31,7 +31,7 @@ export async function startServer({
   onDisconnected,
 }) {
   const serverName = os.hostname();
-  const wss = new WebSocketServer({ port, host });
+  const wss = new WebSocketServer({ port, host, maxPayload: 64 * 1024 });
 
   await new Promise((resolve, reject) => {
     wss.once("listening", resolve);
@@ -51,6 +51,9 @@ export async function startServer({
   }
 
   let activeSocket = null;
+  let pendingCount = 0;
+  const MAX_PENDING_PROMPTS = 4;
+  const APPROVAL_TIMEOUT_MS = 60_000;
   const heartbeatMs = 5000;
   const heartbeatTimer = setInterval(() => {
     for (const client of wss.clients) {
@@ -94,6 +97,7 @@ export async function startServer({
       if (ws.readyState !== WebSocket.OPEN) return;
 
       if (activeSocket && activeSocket !== ws && activeSocket.readyState === WebSocket.OPEN) {
+        driver.releaseAll?.();
         sendJson(activeSocket, { type: "replaced", reason: "Another device connected" });
         activeSocket.close(4000, "Replaced by another device");
       }
@@ -123,11 +127,12 @@ export async function startServer({
           return;
         }
         clearTimeout(helloTimeout);
-        deviceId = msg.deviceId.trim().slice(0, 128);
-        deviceName =
-          typeof msg.deviceName === "string" && msg.deviceName.trim()
-            ? msg.deviceName.trim().slice(0, 64)
-            : "Android Phone";
+        deviceId = sanitizeLabel(msg.deviceId, 128, "");
+        if (deviceId.length < 4) {
+          ws.close(4002, "Invalid deviceId");
+          return;
+        }
+        deviceName = sanitizeLabel(msg.deviceName, 64, "Android Phone");
         const presentedToken = typeof msg.token === "string" ? msg.token : "";
 
         if (!alwaysAsk && trustStore.verify(deviceId, presentedToken, deviceName)) {
@@ -135,7 +140,15 @@ export async function startServer({
           return;
         }
 
+        if (pendingCount >= MAX_PENDING_PROMPTS) {
+          state = "closed";
+          sendJson(ws, { type: "rejected", reason: "Too many pending pairing requests" });
+          ws.close(4004, "Busy");
+          return;
+        }
+
         state = "pending";
+        pendingCount++;
         const code = String(crypto.randomInt(1000, 10000));
         sendJson(ws, {
           type: "pending",
@@ -143,15 +156,31 @@ export async function startServer({
           code,
         });
 
-        const decision = await approver({
-          deviceId,
-          deviceName,
-          remoteIp,
-          code,
-          signal: pendingAbort.signal,
-        });
+        const approvalTimer = setTimeout(() => {
+          pendingAbort.abort();
+        }, APPROVAL_TIMEOUT_MS);
+        approvalTimer.unref?.();
+
+        let decision = "deny";
+        try {
+          decision = await approver({
+            deviceId,
+            deviceName,
+            remoteIp,
+            code,
+            signal: pendingAbort.signal,
+          });
+        } finally {
+          clearTimeout(approvalTimer);
+          pendingCount = Math.max(0, pendingCount - 1);
+        }
 
         if (ws.readyState !== WebSocket.OPEN || pendingAbort.signal.aborted) {
+          if (ws.readyState === WebSocket.OPEN) {
+            state = "closed";
+            sendJson(ws, { type: "rejected", reason: "Approval timed out" });
+            ws.close(4003, "Approval timeout");
+          }
           return;
         }
 
@@ -181,6 +210,7 @@ export async function startServer({
       state = "closed";
       if (activeSocket === ws) {
         activeSocket = null;
+        driver.releaseAll?.();
       }
       if (wasAuthenticated) {
         const reason = reasonBuf?.toString?.("utf8") || "";
@@ -199,6 +229,7 @@ export async function startServer({
     serverName,
     close: async () => {
       clearInterval(heartbeatTimer);
+      driver.releaseAll?.();
       for (const client of wss.clients) {
         try {
           client.close(1001, "Server shutting down");

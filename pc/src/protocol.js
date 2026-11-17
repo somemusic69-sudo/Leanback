@@ -5,6 +5,24 @@ export const PROTOCOL_VERSION = 1;
 
 const VALID_BUTTONS = new Set(["left", "right", "middle"]);
 
+/**
+ * Strip ASCII control characters & ANSI escape artifacts from untrusted peer strings.
+ * @param {unknown} value
+ * @param {number} maxLen
+ * @param {string} fallback
+ * @returns {string}
+ */
+export function sanitizeLabel(value, maxLen = 64, fallback = "Android Phone") {
+  if (typeof value !== "string") return fallback;
+  const cleaned = value
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen);
+  return cleaned || fallback;
+}
+
 function clampNumber(value, min, max, fallback = 0) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -61,7 +79,7 @@ export function handleInputMessage(msg, driver, sendReply) {
       if (typeof msg.text === "string" && msg.text.length > 0) {
         // Guard against oversized single-frame pastes locking the input queue.
         const bounded = msg.text.slice(0, 4096);
-        const modifiers = Array.isArray(msg.modifiers) ? msg.modifiers : [];
+        const modifiers = Array.isArray(msg.modifiers) ? msg.modifiers.slice(0, 4) : [];
         driver.typeText(bounded, modifiers);
       }
       break;
@@ -69,7 +87,7 @@ export function handleInputMessage(msg, driver, sendReply) {
 
     case "key": {
       if (typeof msg.key === "string" && msg.key.length > 0) {
-        const modifiers = Array.isArray(msg.modifiers) ? msg.modifiers : [];
+        const modifiers = Array.isArray(msg.modifiers) ? msg.modifiers.slice(0, 4) : [];
         const repeat = clampNumber(msg.repeat, 1, 20, 1);
         driver.pressKey(msg.key, modifiers, repeat);
       }

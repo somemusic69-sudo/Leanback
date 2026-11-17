@@ -58,6 +58,10 @@ class Prefs(context: Context) {
         get() = prefs.getBoolean(KEY_BUTTON_CLICK_MODE, false)
         set(value) = prefs.edit().putBoolean(KEY_BUTTON_CLICK_MODE, value).apply()
 
+    var buttonLayoutStacked: Boolean
+        get() = prefs.getBoolean(KEY_BUTTON_LAYOUT_STACKED, false)
+        set(value) = prefs.edit().putBoolean(KEY_BUTTON_LAYOUT_STACKED, value).apply()
+
     fun getToken(host: String, port: Int): String? {
         val map = readTokenMap()
         return map.optString("$host:$port", "").takeIf { it.isNotEmpty() }
@@ -104,5 +108,6 @@ class Prefs(context: Context) {
         private const val KEY_NATURAL_SCROLL = "natural_scroll"
         private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         private const val KEY_BUTTON_CLICK_MODE = "button_click_mode"
+        private const val KEY_BUTTON_LAYOUT_STACKED = "button_layout_stacked"
     }
 }

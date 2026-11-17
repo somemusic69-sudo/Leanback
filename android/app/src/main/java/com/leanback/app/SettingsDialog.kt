@@ -412,8 +412,55 @@ class SettingsDialog(
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
+        val layoutSection = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(8)
+                bottomMargin = dp(2)
+            }
+        }
+        layoutSection.addView(TextView(context).apply {
+            text = "Button Layout"
+            setTextColor(Color.parseColor("#A1A1AA"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+        })
+        val layoutRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        val sideBySideBtn = TextView(context).apply {
+            text = "Side-by-side"
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(6)
+            }
+        }
+        val stackedBtn = TextView(context).apply {
+            text = "Right over Left"
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        layoutRow.addView(sideBySideBtn)
+        layoutRow.addView(stackedBtn)
+        layoutSection.addView(layoutRow)
+
         fun refreshClickModeUi() {
             val useButtons = prefs.buttonClickMode
+            val stacked = prefs.buttonLayoutStacked
             fun styleOption(view: TextView, selected: Boolean) {
                 view.setTextColor(
                     if (selected) Color.parseColor("#22D3EE") else Color.parseColor("#A1A1AA")
@@ -426,6 +473,9 @@ class SettingsDialog(
             }
             styleOption(tapOptionBtn, !useButtons)
             styleOption(buttonsOptionBtn, useButtons)
+            styleOption(sideBySideBtn, !stacked)
+            styleOption(stackedBtn, stacked)
+            layoutSection.visibility = if (useButtons) View.VISIBLE else View.GONE
             modeHintView.text = if (useButtons) {
                 "Left/Right buttons below touchpad. Prevents accidental taps and double-taps."
             } else {
@@ -443,10 +493,21 @@ class SettingsDialog(
             refreshClickModeUi()
             onTouchpadConfigChanged()
         }
+        sideBySideBtn.setOnClickListener {
+            prefs.buttonLayoutStacked = false
+            refreshClickModeUi()
+            onTouchpadConfigChanged()
+        }
+        stackedBtn.setOnClickListener {
+            prefs.buttonLayoutStacked = true
+            refreshClickModeUi()
+            onTouchpadConfigChanged()
+        }
 
         modeRow.addView(tapOptionBtn)
         modeRow.addView(buttonsOptionBtn)
         root.addView(modeRow)
+        root.addView(layoutSection)
         refreshClickModeUi()
         root.addView(modeHintView)
 
@@ -519,7 +580,7 @@ class SettingsDialog(
         String.format(Locale.US, "Cursor speed: %.1fx", speed)
 
     private fun parseHostPort(raw: String): Pair<String, Int> {
-        val trimmed = raw.trim().removePrefix("ws://").removePrefix("http://")
+        val trimmed = raw.trim().removePrefix("ws://").removePrefix("http://").trimEnd('/')
         val parts = trimmed.split(":")
         val host = parts.getOrNull(0)?.trim().orEmpty()
         val port = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: Prefs.DEFAULT_PORT
