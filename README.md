@@ -24,7 +24,8 @@ No unsigned `.exe` downloads. Run one command on your PC, open the pure-black ap
 
 - **Zero `.exe` SmartScreen drama** — PC server runs straight from Command Prompt / PowerShell via Node.js (`npx leanback`).
 - **Pure function, zero clutter** — No navbar or top bar. Just a black touchpad on top and your familiar phone keyboard (with swipe typing, autocorrect, and emojis) always ready at the bottom.
-- **Two Click Modes** — Tap directly on the touchpad *(default)*, or switch to **Click buttons** in `⚙` Settings for dedicated `Left` / `Right` buttons below the touchpad (great for two-thumb dragging with zero accidental clicks).
+- **Two Click Modes** — Tap directly on the touchpad *(default)*, or switch to **Click buttons** in `⚙` Settings for `Left` / `Right` buttons (side-by-side or `1:1` square `Right` over `Left` on the bottom-left).
+- **Send photos straight to PC** — Tap the subtle image icon in the top-right corner to pick a photo from your phone; it saves to `Downloads\LeanBack` and copies straight to your PC clipboard ready for `Ctrl+V`.
 - **Safe LAN pairing** — Auto-discovers your PC over Wi-Fi, then asks `[Y]es & remember / [s]ession only / [n]o` on the PC terminal with a 4-digit verification code.
 
 ---
@@ -61,7 +62,7 @@ Switch between modes anytime in **`⚙` Settings → Click Mode**:
 | Mode | Behavior |
 | :--- | :--- |
 | **Tap touchpad** *(default)* | 1-finger tap = Left click, double-tap & hold = Drag, 2-finger tap = Right click, 3-finger tap = Middle click |
-| **Click buttons** | Touchpad only moves cursor & scrolls (no tap-clicks or accidental double-taps). Use the `Left` / `Right` buttons below the pad (supports **Side-by-side** or **Right over Left** stacked layout; hold `Left` + slide pad to drag). |
+| **Click buttons** | Touchpad only moves cursor & scrolls (no tap-clicks or accidental double-taps). Choose **Side-by-side** (`Left` \| `Right`) or **Left side** (`1:1` square `Right` over `Left` column on the bottom-left, keeping the right side open as touchpad). Hold `Left` + slide pad to drag. |
 
 **Always active on both modes:** `1-finger slide` moves cursor, `2-finger slide` scrolls.
 
@@ -75,6 +76,7 @@ leanback --port 8080        Use custom WebSocket port
 leanback --speed 1.4        Cursor speed multiplier (0.2 - 5.0)
 leanback --always-ask       Require [Y/n] PC approval on every connection
 leanback --no-discovery     Disable UDP LAN auto-discovery (7891/udp)
+leanback --no-clipboard     Save uploaded photos without copying to clipboard
 leanback devices            List trusted phones
 leanback revoke <id>        Revoke a trusted phone
 leanback reset              Forget all trusted phones

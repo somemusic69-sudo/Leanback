@@ -25,6 +25,7 @@ function printHelp() {
     -s, --speed <multiplier>  Cursor speed multiplier, 0.2 - 5.0 (default: 1.0)
         --always-ask          Always ask [Y/n] on PC before allowing control
         --no-discovery        Disable UDP LAN auto-discovery
+        --no-clipboard        Save uploaded images without copying to clipboard
     -v, --version             Show version
     -h, --help                Show this help
 `);
@@ -39,6 +40,7 @@ function parseArgs(argv) {
     speed: 1.0,
     alwaysAsk: false,
     discovery: true,
+    clipboard: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -57,6 +59,10 @@ function parseArgs(argv) {
     }
     if (arg === "--no-discovery") {
       opts.discovery = false;
+      continue;
+    }
+    if (arg === "--no-clipboard") {
+      opts.clipboard = false;
       continue;
     }
     if (arg === "-p" || arg === "--port") {
@@ -155,11 +161,13 @@ async function main() {
     port: opts.port,
     alwaysAsk: opts.alwaysAsk,
     enableDiscovery: opts.discovery,
+    copyImagesToClipboard: opts.clipboard,
     driver,
     trustStore,
     approver: ui.requestApproval,
     onConnected: ui.connected,
     onDisconnected: ui.disconnected,
+    onImageReceived: ui.imageReceived,
   });
 
   ui.printBanner();

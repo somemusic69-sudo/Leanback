@@ -63,6 +63,7 @@ The PC operator confirms `[Y]es & remember / [s]ession only / [n]o` in the termi
   "type": "welcome",
   "serverName": "DESKTOP-GAMING",
   "trusted": true,
+  "uploadToken": "per-session-48-hex-upload-token",
   "token": "64-hex-token-omitted-if-already-trusted-or-session-only"
 }
 ```
@@ -76,7 +77,17 @@ Only the SHA-256 hash of `token` is stored on the PC (`~/.leanback/devices.json`
 
 ---
 
-## 3. Authenticated Input Messages (Phone → PC)
+## 3. Authenticated Image Upload (`POST /upload`)
+
+Authenticated clients receive a per-session `uploadToken` in `welcome` and can stream images directly to `http://<pc-ip>:<port>/upload` with header `X-LeanBack-Token: <uploadToken>`.
+
+- Maximum size: **20 MB**
+- Validated by magic bytes (`png`, `jpg`, `gif`, `webp`, `bmp`)
+- Saved safely to `~/Downloads/LeanBack/` (and copied to the Windows clipboard unless `--no-clipboard` is passed)
+
+---
+
+## 4. Authenticated Input Messages (Phone → PC)
 
 | Type | Fields | Description |
 | :--- | :--- | :--- |

@@ -448,7 +448,7 @@ class SettingsDialog(
             }
         }
         val stackedBtn = TextView(context).apply {
-            text = "Right over Left"
+            text = "Left side (R/L)"
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -476,10 +476,10 @@ class SettingsDialog(
             styleOption(sideBySideBtn, !stacked)
             styleOption(stackedBtn, stacked)
             layoutSection.visibility = if (useButtons) View.VISIBLE else View.GONE
-            modeHintView.text = if (useButtons) {
-                "Left/Right buttons below touchpad. Prevents accidental taps and double-taps."
-            } else {
-                "Default: tap touchpad to left-click, 2-finger tap to right-click."
+            modeHintView.text = when {
+                !useButtons -> "Default: tap touchpad to left-click, 2-finger tap to right-click."
+                stacked -> "Square 1:1 Right-over-Left buttons on the bottom-left. Right side stays touchpad."
+                else -> "Left & Right buttons side-by-side below the touchpad (no accidental taps)."
             }
         }
 

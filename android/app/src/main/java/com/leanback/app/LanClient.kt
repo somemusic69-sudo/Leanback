@@ -1,14 +1,23 @@
 package com.leanback.app
 
+import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.BufferedSink
+import okio.source
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.net.InetAddress
 import java.net.Socket
 import java.util.concurrent.TimeUnit
@@ -23,6 +32,7 @@ sealed class ConnectionState {
         val host: String,
         val port: Int,
         val trusted: Boolean,
+        val uploadToken: String? = null,
     ) : ConnectionState()
 }
 
@@ -174,11 +184,12 @@ class LanClient(
                 val serverName = msg.optString("serverName", host)
                 val trusted = msg.optBoolean("trusted", false)
                 val token = msg.optString("token", "")
+                val uploadToken = msg.optString("uploadToken", "").takeIf { it.isNotEmpty() }
                 if (token.isNotEmpty()) {
                     prefs.saveToken(host, port, token)
                 }
                 prefs.lastServerName = serverName
-                updateState(ConnectionState.Connected(serverName, host, port, trusted))
+                updateState(ConnectionState.Connected(serverName, host, port, trusted, uploadToken))
             }
 
             "rejected" -> {
@@ -301,6 +312,52 @@ class LanClient(
         val ws = socket ?: return
         if (currentState !is ConnectionState.Connected) return
         ws.send(payload.toString())
+    }
+
+    suspend fun uploadImage(context: Context, uri: Uri): Result<String> = withContext(Dispatchers.IO) {
+        val connected = currentState as? ConnectionState.Connected
+            ?: return@withContext Result.failure(IllegalStateException("Not connected to PC"))
+        val uploadToken = connected.uploadToken
+            ?: return@withContext Result.failure(IllegalStateException("PC server does not support image upload"))
+
+        val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
+        val body = object : RequestBody() {
+            override fun contentType() = mime.toMediaType()
+            override fun writeTo(sink: BufferedSink) {
+                val stream = context.contentResolver.openInputStream(uri)
+                    ?: throw IOException("Could not read selected image")
+                stream.use { input ->
+                    sink.writeAll(input.source())
+                }
+            }
+        }
+
+        val req = Request.Builder()
+            .url("http://${connected.host}:${connected.port}/upload")
+            .header("X-LeanBack-Token", uploadToken)
+            .post(body)
+            .build()
+
+        try {
+            client.newCall(req).execute().use { resp ->
+                val respText = resp.body?.string().orEmpty()
+                val json = try {
+                    JSONObject(respText)
+                } catch (_: Exception) {
+                    null
+                }
+                if (!resp.isSuccessful) {
+                    val err = json?.optString("error").takeIf { !it.isNullOrBlank() }
+                        ?: "Upload failed (${resp.code})"
+                    return@withContext Result.failure(IOException(err))
+                }
+                val copied = json?.optBoolean("copied", false) == true
+                val label = if (copied) "Photo sent & copied" else "Photo saved to PC"
+                Result.success(label)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     private class NoDelaySocketFactory : SocketFactory() {

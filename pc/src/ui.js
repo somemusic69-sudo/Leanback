@@ -62,6 +62,12 @@ export function createTerminalUI({ port, ips, alwaysAsk, version = "1.0.0" }) {
     console.log(`  ${c.dim}○ Disconnected: ${deviceName}${suffix}${c.reset}`);
   }
 
+  function imageReceived({ filePath, bytes, copied }) {
+    const kb = Math.max(1, Math.round(bytes / 1024));
+    const clipNote = copied ? ` ${c.green}(copied to clipboard)${c.reset}` : "";
+    console.log(`  ${c.cyan}🖼${c.reset} Image saved (${kb} KB): ${c.bold}${filePath}${c.reset}${clipNote}`);
+  }
+
   /**
    * Prompt the user on the PC terminal to accept/deny an incoming phone connection.
    * Serialized so multiple concurrent requests never overlap.
@@ -125,6 +131,7 @@ export function createTerminalUI({ port, ips, alwaysAsk, version = "1.0.0" }) {
     info,
     connected,
     disconnected,
+    imageReceived,
     requestApproval,
     close,
   };

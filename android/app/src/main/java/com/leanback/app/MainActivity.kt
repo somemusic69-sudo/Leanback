@@ -3,7 +3,10 @@ package com.leanback.app
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -15,11 +18,17 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,8 +38,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootLayout: LinearLayout
     private lateinit var touchpadView: TouchpadView
     private lateinit var mouseButtonsRow: LinearLayout
+    private lateinit var leftStackedButtons: LinearLayout
     private lateinit var remoteImeView: RemoteImeView
     private lateinit var centerHint: TextView
+    private lateinit var uploadBtn: ImageButton
     private lateinit var statusDot: View
     private lateinit var statusText: TextView
 
@@ -39,6 +50,27 @@ class MainActivity : AppCompatActivity() {
     private var settingsDialog: SettingsDialog? = null
     private var keyboardUserHidden = false
     private val heldMouseButtons = LinkedHashSet<String>()
+    private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingUploadUri: Uri? = null
+
+    private val clearFlashRunnable = Runnable {
+        if (lanClient.getState() is ConnectionState.Connected) {
+            statusText.visibility = View.GONE
+        }
+    }
+
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        if (lanClient.getState() is ConnectionState.Connected) {
+            startImageUpload(uri)
+        } else {
+            pendingUploadUri = uri
+            flashStatus("Waiting to send photo...", autoClear = false)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,13 +122,15 @@ class MainActivity : AppCompatActivity() {
             lanClient.sendMouseUp(btn)
         }
         heldMouseButtons.clear()
-        populateMouseButtonsRow()
+        populateMouseButtons()
         if (!isChangingConfigurations) {
             lanClient.disconnect(manual = false)
         }
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(clearFlashRunnable)
+        uiScope.cancel()
         settingsDialog?.dismiss()
         settingsDialog = null
         super.onDestroy()
@@ -130,6 +164,7 @@ class MainActivity : AppCompatActivity() {
         // Top side: pure black touchpad + tiny unobtrusive top-right settings button
         val padFrame = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
+            isMotionEventSplittingEnabled = true
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -202,6 +237,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        uploadBtn = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_upload_image)
+            contentDescription = getString(R.string.upload_image_cd)
+            setBackgroundColor(Color.TRANSPARENT)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            layoutParams = LinearLayout.LayoutParams(dp(38), dp(38))
+            setOnClickListener {
+                val st = lanClient.getState()
+                if (st is ConnectionState.Connected || st is ConnectionState.Connecting) {
+                    imagePickerLauncher.launch("image/*")
+                } else {
+                    openSettings()
+                }
+            }
+        }
+        topRight.addView(uploadBtn)
+
         val settingsBtn = ImageButton(this).apply {
             setImageResource(R.drawable.ic_settings)
             contentDescription = getString(R.string.settings_cd)
@@ -214,6 +267,20 @@ class MainActivity : AppCompatActivity() {
         topRight.addView(settingsBtn)
         padFrame.addView(topRight)
 
+        // Optional left-side stacked 1:1 Right-over-Left column floating at bottom-left
+        leftStackedButtons = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.TRANSPARENT)
+            isMotionEventSplittingEnabled = true
+            setPadding(dp(6), dp(4), dp(4), dp(6))
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START,
+            )
+        }
+        padFrame.addView(leftStackedButtons)
+
         // Tiny focus anchor view so the system keyboard stays active at the bottom
         remoteImeView = RemoteImeView(this).apply {
             layoutParams = FrameLayout.LayoutParams(1, 1, Gravity.BOTTOM or Gravity.START)
@@ -221,8 +288,18 @@ class MainActivity : AppCompatActivity() {
         padFrame.addView(remoteImeView)
         rootLayout.addView(padFrame)
 
-        // Optional dedicated Left/Right click buttons (visible in Click Buttons mode)
-        mouseButtonsRow = buildMouseButtonsRow()
+        // Optional side-by-side Left/Right click bar below touchpad
+        mouseButtonsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.BLACK)
+            isMotionEventSplittingEnabled = true
+            setPadding(dp(6), dp(2), dp(6), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(50),
+            )
+        }
+        populateMouseButtons()
         rootLayout.addView(mouseButtonsRow)
 
         // Subtle 1px divider above the PC quick-key strip
@@ -312,109 +389,107 @@ class MainActivity : AppCompatActivity() {
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun buildMouseButtonsRow(): LinearLayout {
-        mouseButtonsRow = LinearLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
-            isMotionEventSplittingEnabled = true
-            setPadding(dp(6), dp(2), dp(6), dp(6))
+    private fun makeMouseClickButton(
+        label: String,
+        buttonName: String,
+        params: LinearLayout.LayoutParams,
+    ): TextView {
+        fun applyStyle(pressed: Boolean, view: TextView) {
+            view.setTextColor(
+                if (pressed) Color.parseColor("#22D3EE") else Color.parseColor("#71717A")
+            )
+            view.background = GradientDrawable().apply {
+                cornerRadius = 8f * resources.displayMetrics.density
+                setColor(if (pressed) Color.parseColor("#11282F") else Color.parseColor("#0A0A0D"))
+                setStroke(
+                    1,
+                    if (pressed) Color.parseColor("#22D3EE") else Color.parseColor("#1D1D22")
+                )
+            }
         }
-        populateMouseButtonsRow()
-        return mouseButtonsRow
+
+        return TextView(this).apply {
+            text = label
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            applyStyle(false, this)
+            layoutParams = params
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        if (heldMouseButtons.add(buttonName)) {
+                            applyStyle(true, v as TextView)
+                            lanClient.sendMouseDown(buttonName)
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (heldMouseButtons.remove(buttonName)) {
+                            applyStyle(false, v as TextView)
+                            lanClient.sendMouseUp(buttonName)
+                            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                                remoteImeView.resetBuffer()
+                            }
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
     }
 
-    @SuppressLint("ClickableViewAccessibility")
-    private fun populateMouseButtonsRow() {
-        if (!::mouseButtonsRow.isInitialized) return
+    private fun populateMouseButtons() {
+        if (!::mouseButtonsRow.isInitialized || !::leftStackedButtons.isInitialized) return
         mouseButtonsRow.removeAllViews()
+        leftStackedButtons.removeAllViews()
 
-        val stacked = prefs.buttonLayoutStacked
-        mouseButtonsRow.orientation = if (stacked) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-        mouseButtonsRow.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            if (stacked) dp(84) else dp(46),
+        mouseButtonsRow.addView(
+            makeMouseClickButton(
+                "Left",
+                "left",
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    rightMargin = dp(6)
+                }
+            )
+        )
+        mouseButtonsRow.addView(
+            makeMouseClickButton(
+                "Right",
+                "right",
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            )
         )
 
-        fun makeClickButton(label: String, buttonName: String, params: LinearLayout.LayoutParams): TextView {
-            fun applyStyle(pressed: Boolean, view: TextView) {
-                view.setTextColor(
-                    if (pressed) Color.parseColor("#22D3EE") else Color.parseColor("#71717A")
-                )
-                view.background = GradientDrawable().apply {
-                    cornerRadius = 8f * resources.displayMetrics.density
-                    setColor(if (pressed) Color.parseColor("#11282F") else Color.parseColor("#0A0A0D"))
-                    setStroke(
-                        1,
-                        if (pressed) Color.parseColor("#22D3EE") else Color.parseColor("#1D1D22")
-                    )
-                }
-            }
+        val dm = resources.displayMetrics
+        val squarePx = minOf(
+            dp(120),
+            (dm.widthPixels * 0.28f).toInt(),
+            (dm.heightPixels * 0.145f).toInt(),
+        ).coerceAtLeast(dp(84))
 
-            return TextView(this).apply {
-                text = label
-                gravity = Gravity.CENTER
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                applyStyle(false, this)
-                layoutParams = params
-                setOnTouchListener { v, event ->
-                    when (event.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> {
-                            if (heldMouseButtons.add(buttonName)) {
-                                applyStyle(true, v as TextView)
-                                lanClient.sendMouseDown(buttonName)
-                            }
-                            true
-                        }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            if (heldMouseButtons.remove(buttonName)) {
-                                applyStyle(false, v as TextView)
-                                lanClient.sendMouseUp(buttonName)
-                                if (event.actionMasked == MotionEvent.ACTION_UP) {
-                                    remoteImeView.resetBuffer()
-                                }
-                            }
-                            true
-                        }
-                        else -> false
-                    }
-                }
-            }
-        }
+        leftStackedButtons.layoutParams = FrameLayout.LayoutParams(
+            squarePx + dp(10),
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START,
+        )
 
-        if (stacked) {
-            mouseButtonsRow.addView(
-                makeClickButton(
-                    "Right",
-                    "right",
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)).apply {
-                        bottomMargin = dp(4)
-                    }
-                )
+        leftStackedButtons.addView(
+            makeMouseClickButton(
+                "Right",
+                "right",
+                LinearLayout.LayoutParams(squarePx, squarePx).apply {
+                    bottomMargin = dp(6)
+                }
             )
-            mouseButtonsRow.addView(
-                makeClickButton(
-                    "Left",
-                    "left",
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40))
-                )
+        )
+        leftStackedButtons.addView(
+            makeMouseClickButton(
+                "Left",
+                "left",
+                LinearLayout.LayoutParams(squarePx, squarePx)
             )
-        } else {
-            mouseButtonsRow.addView(
-                makeClickButton(
-                    "Left",
-                    "left",
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
-                        rightMargin = dp(6)
-                    }
-                )
-            )
-            mouseButtonsRow.addView(
-                makeClickButton(
-                    "Right",
-                    "right",
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-                )
-            )
-        }
+        )
     }
 
     private fun bindListeners() {
@@ -503,8 +578,10 @@ class MainActivity : AppCompatActivity() {
         touchpadView.sensitivity = prefs.sensitivity
         touchpadView.naturalScroll = prefs.naturalScroll
         touchpadView.tapToClickEnabled = !prefs.buttonClickMode
-        populateMouseButtonsRow()
-        mouseButtonsRow.visibility = if (prefs.buttonClickMode) View.VISIBLE else View.GONE
+        val showSideBySide = prefs.buttonClickMode && !prefs.buttonLayoutStacked
+        val showLeftStacked = prefs.buttonClickMode && prefs.buttonLayoutStacked
+        mouseButtonsRow.visibility = if (showSideBySide) View.VISIBLE else View.GONE
+        leftStackedButtons.visibility = if (showLeftStacked) View.VISIBLE else View.GONE
         applyKeepScreenOn(lanClient.getState())
     }
 
@@ -513,11 +590,19 @@ class MainActivity : AppCompatActivity() {
         applyKeepScreenOn(state)
 
         val dotDrawable = statusDot.background as? GradientDrawable
+        uploadBtn.alpha = if (state is ConnectionState.Connected) 1f else 0.45f
         when (state) {
             is ConnectionState.Connected -> {
                 dotDrawable?.setColor(Color.parseColor("#34D399"))
-                statusText.visibility = View.GONE
                 centerHint.visibility = View.GONE
+                val queued = pendingUploadUri
+                if (queued != null) {
+                    pendingUploadUri = null
+                    startImageUpload(queued)
+                } else {
+                    mainHandler.removeCallbacks(clearFlashRunnable)
+                    statusText.visibility = View.GONE
+                }
             }
 
             is ConnectionState.PendingApproval -> {
@@ -535,6 +620,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             is ConnectionState.Disconnected -> {
+                if (state.rejected) {
+                    pendingUploadUri = null
+                }
                 dotDrawable?.setColor(
                     if (state.rejected) Color.parseColor("#F87171") else Color.parseColor("#52525B")
                 )
@@ -546,6 +634,27 @@ class MainActivity : AppCompatActivity() {
                 statusText.visibility = if (statusText.text.isEmpty()) View.GONE else View.VISIBLE
                 centerHint.visibility = if (prefs.lastHost.isNullOrBlank()) View.VISIBLE else View.GONE
             }
+        }
+    }
+
+    private fun startImageUpload(uri: Uri) {
+        flashStatus("Sending photo...", autoClear = false)
+        uiScope.launch {
+            val result = lanClient.uploadImage(this@MainActivity, uri)
+            result.onSuccess { msg ->
+                flashStatus(msg, autoClear = true)
+            }.onFailure { err ->
+                flashStatus(err.message ?: "Photo upload failed", autoClear = true)
+            }
+        }
+    }
+
+    private fun flashStatus(message: String, autoClear: Boolean) {
+        mainHandler.removeCallbacks(clearFlashRunnable)
+        statusText.text = message
+        statusText.visibility = View.VISIBLE
+        if (autoClear) {
+            mainHandler.postDelayed(clearFlashRunnable, 2600L)
         }
     }
 

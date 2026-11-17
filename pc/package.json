@@ -4,7 +4,7 @@
   "description": "Control your PC mouse and keyboard from your phone over Wi-Fi — lean back and type.",
   "type": "module",
   "bin": {
-    "leanback": "./bin/leanback.js"
+    "leanback": "bin/leanback.js"
   },
   "files": [
     "bin/",

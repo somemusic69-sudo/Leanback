@@ -1,8 +1,10 @@
+import http from "node:http";
 import os from "node:os";
 import crypto from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { DEFAULT_WS_PORT, handleInputMessage, sanitizeLabel } from "./protocol.js";
 import { startDiscoveryResponder, getLocalIPv4Addresses } from "./discovery.js";
+import { MAX_UPLOAD_BYTES, saveUploadedImage } from "./upload.js";
 
 function normalizeIp(raw) {
   if (!raw) return "unknown";
@@ -15,8 +17,51 @@ function sendJson(ws, payload) {
   }
 }
 
+function safeTokenEquals(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || !a || a.length !== b.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
+function readLimitedBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    let settled = false;
+
+    req.on("data", (chunk) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        settled = true;
+        const err = new Error("Image exceeds maximum allowed size");
+        err.statusCode = 413;
+        req.pause();
+        reject(err);
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      if (!settled) {
+        settled = true;
+        resolve(Buffer.concat(chunks, total));
+      }
+    });
+
+    req.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+  });
+}
+
 /**
- * Start the LeanBack WebSocket + LAN Discovery server.
+ * Start the LeanBack WebSocket + HTTP Upload + LAN Discovery server.
  */
 export async function startServer({
   port = DEFAULT_WS_PORT,
@@ -24,21 +69,74 @@ export async function startServer({
   alwaysAsk = false,
   enableDiscovery = true,
   discoveryPort,
+  saveDir,
+  copyImagesToClipboard = true,
   driver,
   trustStore,
   approver,
   onConnected,
   onDisconnected,
+  onImageReceived,
 }) {
   const serverName = os.hostname();
-  const wss = new WebSocketServer({ port, host, maxPayload: 64 * 1024 });
+  let activeSocket = null;
+  let activeUploadToken = null;
 
-  await new Promise((resolve, reject) => {
-    wss.once("listening", resolve);
-    wss.once("error", reject);
+  const httpServer = http.createServer(async (req, res) => {
+    const jsonRes = (status, body, closeAfter = false) => {
+      const headers = { "Content-Type": "application/json" };
+      if (closeAfter) headers.Connection = "close";
+      res.writeHead(status, headers);
+      res.end(JSON.stringify(body), () => {
+        if (closeAfter) req.destroy();
+      });
+    };
+
+    if (req.method !== "POST" || req.url?.split("?")[0] !== "/upload") {
+      jsonRes(404, { error: "Not found" });
+      return;
+    }
+
+    const headerToken = req.headers["x-leanback-token"];
+    if (!activeUploadToken || !safeTokenEquals(String(headerToken || ""), activeUploadToken)) {
+      jsonRes(401, { error: "Unauthorized" }, true);
+      return;
+    }
+
+    const declaredLength = Number(req.headers["content-length"]);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+      jsonRes(413, { error: "Image exceeds 20 MB limit" }, true);
+      return;
+    }
+
+    try {
+      const body = await readLimitedBody(req, MAX_UPLOAD_BYTES);
+      const saved = await saveUploadedImage(body, {
+        saveDir,
+        copyToClipboard: copyImagesToClipboard,
+      });
+      onImageReceived?.(saved);
+      jsonRes(200, {
+        ok: true,
+        filename: saved.filename,
+        path: saved.filePath,
+        copied: saved.copied,
+      });
+    } catch (err) {
+      const status = err?.statusCode || 400;
+      jsonRes(status, { error: err?.message || "Upload failed" }, status === 413);
+    }
   });
 
-  const actualPort = wss.address().port;
+  const wss = new WebSocketServer({ server: httpServer, maxPayload: 64 * 1024 });
+
+  await new Promise((resolve, reject) => {
+    httpServer.once("listening", resolve);
+    httpServer.once("error", reject);
+    httpServer.listen(port, host);
+  });
+
+  const actualPort = httpServer.address().port;
   const discovery = enableDiscovery
     ? startDiscoveryResponder({
         wsPort: actualPort,
@@ -50,7 +148,6 @@ export async function startServer({
     await discovery.ready;
   }
 
-  let activeSocket = null;
   let pendingCount = 0;
   const MAX_PENDING_PROMPTS = 4;
   const APPROVAL_TIMEOUT_MS = 60_000;
@@ -102,12 +199,14 @@ export async function startServer({
         activeSocket.close(4000, "Replaced by another device");
       }
       activeSocket = ws;
+      activeUploadToken = crypto.randomBytes(24).toString("hex");
       state = "authenticated";
 
       sendJson(ws, {
         type: "welcome",
         serverName,
         trusted,
+        uploadToken: activeUploadToken,
         ...(issuedToken ? { token: issuedToken } : {}),
       });
       onConnected?.(deviceName, remoteIp, trusted);
@@ -210,6 +309,7 @@ export async function startServer({
       state = "closed";
       if (activeSocket === ws) {
         activeSocket = null;
+        activeUploadToken = null;
         driver.releaseAll?.();
       }
       if (wasAuthenticated) {
@@ -229,6 +329,7 @@ export async function startServer({
     serverName,
     close: async () => {
       clearInterval(heartbeatTimer);
+      activeUploadToken = null;
       driver.releaseAll?.();
       for (const client of wss.clients) {
         try {
@@ -245,6 +346,7 @@ export async function startServer({
       await Promise.all([
         discovery ? discovery.close() : Promise.resolve(),
         new Promise((resolve) => wss.close(() => resolve())),
+        new Promise((resolve) => httpServer.close(() => resolve())),
       ]);
     },
   };
