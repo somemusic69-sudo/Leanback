@@ -1,0 +1,27 @@
+# Node / npm
+node_modules/
+npm-debug.log*
+.npm/
+
+# Android / Gradle
+android/.gradle/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/build/
+android/build/
+android/.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.jks
+*.keystore
+keystore.properties
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/

@@ -1,0 +1,37 @@
+{
+  "name": "leanback",
+  "version": "1.0.0",
+  "description": "Control your PC mouse and keyboard from your phone over Wi-Fi — lean back and type.",
+  "type": "module",
+  "bin": {
+    "leanback": "./bin/leanback.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node ./bin/leanback.js",
+    "test": "node --test ./test/*.test.js"
+  },
+  "keywords": [
+    "remote",
+    "touchpad",
+    "keyboard",
+    "mouse",
+    "android",
+    "websocket",
+    "lan",
+    "leanback"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "koffi": "^2.9.2",
+    "ws": "^8.18.0"
+  }
+}

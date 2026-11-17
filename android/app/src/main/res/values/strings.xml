@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LeanBack</string>
+    <string name="settings_cd">Connection and touchpad settings</string>
+    <string name="keyboard_cd">Show keyboard</string>
+    <string name="hint_connect">Tap ⚙ in the top-right corner to connect your PC</string>
+</resources>
